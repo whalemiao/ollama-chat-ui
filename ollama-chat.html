@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>本地模型聊天（Ollama）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; background: #0f1220; color: #e6e9f2;
+    font: 15px/1.6 "Microsoft YaHei UI", "Sarasa Mono SC", system-ui, sans-serif;
+    overflow: hidden;
+  }
+  /* ---------- 左侧对话列表 ---------- */
+  aside {
+    width: 240px; flex: 0 0 240px; display: flex; flex-direction: column;
+    background: #12162a; border-right: 1px solid #232a40;
+  }
+  aside.collapsed { display: none; }
+  .side-top { padding: 10px; border-bottom: 1px solid #232a40; }
+  #btnNew { width: 100%; }
+  #chatList { flex: 1; overflow-y: auto; list-style: none; margin: 0; padding: 6px; }
+  #chatList li {
+    display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 8px;
+    cursor: pointer; font-size: 13px; color: #b9c3da;
+  }
+  #chatList li:hover { background: #1a2036; }
+  #chatList li.active { background: #22304f; color: #fff; }
+  #chatList li .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #chatList li .del { opacity: 0; font-size: 12px; color: #f08a8a; padding: 0 2px; }
+  #chatList li:hover .del { opacity: 1; }
+  .side-foot { padding: 8px 10px; border-top: 1px solid #232a40; }
+  .side-foot button { width: 100%; font-size: 12px; }
+
+  /* ---------- 右侧主区 ---------- */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  header {
+    padding: 8px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    border-bottom: 1px solid #232a40; background: #141829;
+  }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #1d2540; color: #8fa2c8; }
+  .badge.on { background: #1f3a2a; color: #6ee7a8; }
+  .badge.off { background: #3a1f1f; color: #fca5a5; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px;
+    border: 1px solid #2b3450; background: #1a2036; color: #dbe2f3; cursor: pointer;
+  }
+  button:hover { background: #232b46; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: #3b5bdb; border-color: #3b5bdb; color: #fff; }
+  button.icon { padding: 6px 9px; }
+
+  #log { flex: 1; overflow-y: auto; padding: 16px; }
+  .msg { max-width: 880px; margin: 0 auto 14px; display: flex; gap: 10px; }
+  .who { flex: 0 0 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 13px; }
+  .me .who { background: #2b3450; }
+  .ai .who { background: #1f3a2a; }
+  .bubble { flex: 1; min-width: 0; }
+  .text { white-space: pre-wrap; word-break: break-word; }
+  .meta { font-size: 11px; color: #6b7a9c; margin-top: 4px; }
+  .copybtn { font-size: 11px; padding: 1px 7px; margin-top: 4px; border-radius: 6px;
+             border: 1px solid #2b3450; background: #161d30; color: #8fa2c8;
+             cursor: pointer; opacity: .5; transition: opacity .12s; }
+  .msg:hover .copybtn { opacity: 1; }
+  .thinking { color: #7d8bb0; font-size: 13px; font-style: italic; }
+  .thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .thumbs img { width: 92px; height: 92px; object-fit: cover; border-radius: 8px; border: 1px solid #2b3450; }
+
+  /* 工具结果面板 */
+  #toolOut { border-top: 1px solid #2b3450; background: #141a2e; padding: 10px 16px; max-height: 34vh; overflow-y: auto; }
+  #toolOut .to-head { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #9fb0d4; }
+  #toolOut pre { white-space: pre-wrap; word-break: break-word; margin: 8px 0 0; font: inherit; color: #e6e9f2; }
+
+  footer { border-top: 1px solid #232a40; background: #141829; padding: 10px 16px 14px; }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  .row { display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; min-height: 46px; max-height: 220px; padding: 11px 13px;
+    border-radius: 12px; border: 1px solid #2b3450; background: #0d1120; color: #e6e9f2;
+    font: inherit; outline: none;
+  }
+  textarea:focus { border-color: #3b5bdb; }
+  .tools { margin-top: 8px; gap: 8px; flex-wrap: wrap; }
+  .tools button { font-size: 12px; padding: 5px 10px; }
+  .hint { font-size: 12px; color: #6b7a9c; margin-top: 8px; }
+  code { background: #1a2036; padding: 1px 5px; border-radius: 4px; }
+  .drop-hi { outline: 2px dashed #3b5bdb; outline-offset: -6px; }
+</style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="side-top">
+    <button id="btnNew" class="primary">＋ 新建对话</button>
+  </div>
+  <ul id="chatList"></ul>
+  <div class="side-foot">
+    <button id="btnExportAll">导出全部（JSON）</button>
+  </div>
+</aside>
+
+<main>
+  <header>
+    <button class="icon" id="btnSide" title="显示/隐藏对话列表">☰</button>
+    <h1 id="modelName">本地聊天</h1>
+    <span class="badge" id="state">连接中…</span>
+    <span class="badge off" id="thinkBadge">思考：关闭</span>
+    <select id="presetSel" title="预设角色（system prompt）"
+            style="font:inherit;font-size:12px;padding:4px 8px;border-radius:8px;
+                   border:1px solid #2b3450;background:#1a2036;color:#dbe2f3"></select>
+    <span class="spacer"></span>
+    <button id="btnThink" title="数学/多步推理时才需要，会很慢">打开思考</button>
+    <button id="btnExportMd">导出这段（Markdown）</button>
+  </header>
+
+  <div id="log"></div>
+
+  <div id="toolOut" hidden>
+    <div class="to-head">
+      <strong id="toolTitle">工具结果</strong>
+      <span class="spacer"></span>
+      <button class="icon" id="btnCopyTool" title="复制结果">复制</button>
+      <button class="icon" id="btnCloseTool" title="关闭">✕</button>
+    </div>
+    <pre id="toolBody"></pre>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <div class="row">
+        <button class="icon" id="btnPick" title="选图片（也能直接拖进来 / 粘贴）">📎</button>
+        <textarea id="input" placeholder="说点什么…（Enter 发送，Shift+Enter 换行，可拖图片进来）"></textarea>
+        <button class="primary" id="btnSend">发送</button>
+      </div>
+      <div class="row tools">
+        <button id="btnTranslate" title="把输入框内容（空则用上一条回答）翻成英文">翻译成英文</button>
+        <button id="btnTranslateZh" title="把输入框内容（空则用上一条回答）翻成中文">翻译成中文</button>
+        <button id="btnSummary" title="把输入框内容（空则用上一条回答）压缩成要点">总结这段</button>
+        <button id="btnClearOne" title="只清空当前对话的消息">清空这段</button>
+      </div>
+      <div class="hint">
+        模型 <code>qwen3.5:2b</code> · <code>http://127.0.0.1:11434</code> ·
+        关思考时一句话约 10–30 秒 · 图片会拖慢不少（视觉编码吃 token）
+      </div>
+    </div>
+  </footer>
+</main>
+
+<input type="file" id="filePick" accept="image/*" multiple hidden>
+
+<script>
+/* ---- 全局错误横幅：任何未捕获异常都显示出来，不再静默 ---- */
+function showErrorBanner(text) {
+  let bar = document.getElementById('errBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'errBar';
+    bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#5a1f1f;color:#ffd7d7;' +
+      'padding:8px 14px;font:13px/1.5 monospace;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    bar.onclick = () => bar.remove();
+    bar.title = '点一下关闭';
+    document.body.appendChild(bar);
+  }
+  bar.textContent = '页面出错（点此关闭）：\n' + text;
+}
+window.addEventListener('error', (e) => {
+  showErrorBanner((e.message || '脚本错误') + '\n' + (e.filename || '') + ':' + (e.lineno || ''));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const r = e.reason || {};
+  showErrorBanner('Promise 未捕获：' + (r.message || String(r)));
+});
+const API = 'http://127.0.0.1:11434';
+// 模型可通过 ?model=qwen2.5:3b 指定，也会记住上次选择
+const MODEL_KEY = 'ollama-chat:model:v1';
+const MODEL = (new URLSearchParams(location.search).get('model')) ||
+              localStorage.getItem(MODEL_KEY) || 'qwen3.5:2b';
+localStorage.setItem(MODEL_KEY, MODEL);
+const STORE_KEY = 'qwen3.5:chats:v1';
+const MAX_IMG_BYTES = 2 * 1024 * 1024;
+
+const $ = (id) => document.getElementById(id);
+const log = $('log'), input = $('input');
+const btnSend = $('btnSend'), btnNew = $('btnNew'), chatList = $('chatList');
+const stateBadge = $('state'), thinkBadge = $('thinkBadge'), btnThink = $('btnThink');
+const toolOut = $('toolOut'), toolTitle = $('toolTitle'), toolBody = $('toolBody');
+
+/* ---- 预设角色：单独一块，和对话内容分开 ---- */
+const PRESET_KEY = 'qwen3.5:preset:v1';
+const PRESETS = [
+  { id: 'follow',  name: '跟随语言（默认）', system: '回答时请使用与用户提问相同的语言。' },
+  { id: 'zh',      name: '中文助手',        system: '始终用简体中文回答。' },
+  { id: 'en',      name: '英文助手',        system: 'Always answer in English.' },
+  { id: 'strict',  name: '严谨模式',        system: '只陈述你能确认的内容。不确定就直说"我不确定"，不要编造人名、作品名、数字或事实。' },
+  { id: 'brief',   name: '简洁模式',        system: '回答尽量简短：能一句话说完就别说两句，不要客套开场白。' },
+  { id: 'translator', name: '翻译官',       system: '你只做翻译。把用户给的内容译成目标语言（未指定则中英互译），只输出译文，不解释。' }
+];
+let presetId = localStorage.getItem(PRESET_KEY) || 'follow';
+function currentPreset() {
+  return PRESETS.find(p => p.id === presetId) || PRESETS[0];
+}
+
+let store = { chats: [], currentId: null };
+let thinking = false;
+let pendingImages = [];   // [{b64, dataUrl, name}]
+
+/* ---- 生成状态：按「对话」分别记，不再全局 busy ---- */
+const busyChats = new Set();   // 正在生成（或排队）的对话 id
+
+/* 每个对话的实时生成状态：切换对话时界面会重绘，
+ * 靠这个 Map 把"正在吐的字"重新挂到新的 DOM 节点上，逐字输出就不会丢。 */
+const streams = new Map();
+// chatId -> { out, meta, status, node, textEl, metaEl, thinkEl }
+
+/* ---- 单通道队列：这台机器一次只能跑一个生成，并发会互相踢 ---- */
+const jobQueue = [];        // 等待中的任务
+let currentJob = null;      // { chatId, ac }
+
+function enqueueJob(job) {
+  jobQueue.push(job);
+  pumpQueue();
+}
+
+function pumpQueue() {
+  if (currentJob || !jobQueue.length) return;
+  const job = jobQueue.shift();
+  if (job.cancelled) { busyChats.delete(job.chatId); pumpQueue(); return; }
+  currentJob = job;
+  job.run().finally(() => {
+    currentJob = null;
+    busyChats.delete(job.chatId);
+    pumpQueue();
+  });
+}
+
+function queuePosition(chatId) {
+  const i = jobQueue.findIndex(j => j.chatId === chatId && !j.cancelled);
+  return i < 0 ? 0 : i + 1;
+}
+
+/* 只中断指定对话：从队列里踢掉，或者在跑的就 abort */
+function cancelChat(chatId) {
+  for (const j of jobQueue) if (j.chatId === chatId) j.cancelled = true;
+  if (currentJob && currentJob.chatId === chatId) {
+    try { currentJob.ac.abort(); } catch (e) {}
+  }
+  busyChats.delete(chatId);
+}
+/* 唯一 ID：连续快速点击时 Date.now() 会撞车，导致"新建了但看起来没新建" */
+let idSeq = 0;
+function uid() {
+  if (window.crypto && crypto.randomUUID) return 'c' + crypto.randomUUID();
+  return 'c' + Date.now().toString(36) + '-' + (++idSeq);
+}
+
+/* ---------------- 存储 ---------------- */
+function loadStore() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) store = JSON.parse(raw);
+  } catch (e) { console.warn('读取失败', e); }
+  if (!Array.isArray(store.chats)) store.chats = [];
+  if (!store.currentId || !store.chats.find(c => c.id === store.currentId)) {
+    store.currentId = store.chats.length ? store.chats[0].id : null;
+  }
+}
+function saveStore() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(store));
+    return true;
+  } catch (e) {
+    // 图片太大容易撑爆 5MB 配额
+    console.warn('保存失败（可能超出 localStorage 配额）', e);
+    toast('保存失败：对话太长了（图片占空间），可以导出后清空');
+    return false;
+  }
+}
+function current() { return store.chats.find(c => c.id === store.currentId) || null; }
+function newChat(silent) {
+  // 不再中断别的对话：生成会继续跑完并存回原来的对话                       // 切走前把正在生成的收尾，避免半截回答丢失
+  const c = { id: uid(), title: '新对话', created: Date.now(), messages: [] };
+  store.chats.unshift(c);
+  store.currentId = c.id;
+  saveStore(); renderList(); renderMessages();
+  if (!silent) input.focus();
+}
+function delChat(id) {
+  const i = store.chats.findIndex(c => c.id === id);
+  if (i < 0) return;
+  if (!confirm('删除这个对话？')) return;
+  cancelChat(id);   // 只中断这一个对话
+  store.chats.splice(i, 1);
+  if (store.currentId === id) store.currentId = store.chats.length ? store.chats[0].id : null;
+  saveStore(); renderList(); renderMessages();
+}
+function switchChat(id) {
+  if (store.currentId === id) return;
+  // 不中断：切换只是换个视角，生成中的对话会继续跑                       // 同样：切换前收尾
+  store.currentId = id;
+  saveStore(); renderList(); renderMessages();
+  input.focus();
+}
+
+/* ---------------- 渲染 ---------------- */
+function renderList() {
+  chatList.innerHTML = '';
+  for (const c of store.chats) {
+    const li = document.createElement('li');
+    if (c.id === store.currentId) li.className = 'active';
+    const t = document.createElement('span');
+    t.className = 't';
+    t.textContent = c.title || '新对话';
+    const d = document.createElement('span');
+    d.className = 'del';
+    d.textContent = '✕';
+    d.title = '删除';
+    d.onclick = (e) => { e.stopPropagation(); delChat(c.id); };
+    li.append(t, d);
+    li.onclick = () => switchChat(c.id);
+    chatList.appendChild(li);
+  }
+}
+
+function bubble(role, text, images, meta) {
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + (role === 'user' ? 'me' : 'ai');
+  wrap.innerHTML = '<div class="who">' + (role === 'user' ? '你' : 'AI') +
+                   '</div><div class="bubble"><div class="thinking"></div>' +
+                   '<div class="text"></div><div class="meta"></div><div class="thumbs"></div></div>';
+  wrap.querySelector('.text').textContent = text || '';
+  wrap.querySelector('.thinking').textContent = '';
+  wrap.querySelector('.meta').textContent = meta || '';
+
+  // 每条消息一个「复制」按钮（hover 才明显）
+  const copy = document.createElement('button');
+  copy.className = 'copybtn';
+  copy.textContent = '复制';
+  copy.title = '复制这条内容';
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(text || '');
+      copy.textContent = '已复制';
+      setTimeout(() => { copy.textContent = '复制'; }, 1200);
+    } catch (e) { copy.textContent = '失败'; }
+  };
+  wrap.querySelector('.bubble').appendChild(copy);
+  const th = wrap.querySelector('.thumbs');
+  for (const src of (images || [])) {
+    const img = document.createElement('img');
+    img.src = src.startsWith('data:') ? src : 'data:image/png;base64,' + src;
+    th.appendChild(img);
+  }
+  log.appendChild(wrap);
+  log.scrollTop = log.scrollHeight;
+  return wrap;
+}
+
+function renderMessages() {
+  log.innerHTML = '';
+  const c = current();
+  if (!c) {
+    const p = document.createElement('div');
+    p.className = 'hint';
+    p.style.textAlign = 'center';
+    p.style.marginTop = '40px';
+    p.textContent = '还没有对话，点左上角「＋ 新建对话」开始';
+    log.appendChild(p);
+    return;
+  }
+  for (const m of c.messages) bubble(m.role, m.content, m.images, m.meta);
+
+  // 这个对话如果正在生成，补一个实时气泡并重新挂载（否则切换后看不到逐字输出）
+  const st = streams.get(c.id);
+  if (st) {
+    const node = bubble('ai', st.out || '');
+    st.node = node;
+    st.textEl = node.querySelector('.text');
+    st.metaEl = node.querySelector('.meta');
+    st.thinkEl = node.querySelector('.thinking');
+    st.textEl.textContent = st.out || '';
+    st.metaEl.textContent = st.meta || '';
+    if (st.thinkingText) st.thinkEl.textContent = st.thinkingText;
+  }
+}
+
+/* ---------------- 状态 ---------------- */
+(async () => {
+  try {
+    const r = await fetch(API + '/api/version');
+    const j = await r.json();
+    stateBadge.textContent = '已连接 ' + j.version;
+    stateBadge.className = 'badge on';
+  } catch (e) {
+    stateBadge.textContent = '连不上 Ollama';
+    stateBadge.className = 'badge off';
+  }
+})();
+
+/* 预设角色选择器 */
+const presetSel = $('presetSel');
+for (const p of PRESETS) {
+  const o = document.createElement('option');
+  o.value = p.id; o.textContent = p.name;
+  presetSel.appendChild(o);
+}
+presetSel.value = currentPreset().id;
+presetSel.onchange = () => {
+  presetId = presetSel.value;
+  localStorage.setItem(PRESET_KEY, presetId);
+  toast('预设已切换：' + currentPreset().name);
+};
+
+btnThink.onclick = () => {
+  thinking = !thinking;
+  thinkBadge.textContent = thinking ? '思考：开启（会慢）' : '思考：关闭';
+  thinkBadge.className = 'badge ' + (thinking ? 'on' : 'off');
+  btnThink.textContent = thinking ? '关闭思考' : '打开思考';
+};
+
+/* ---------------- 图片 ---------------- */
+function addFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    if (f.size > MAX_IMG_BYTES) { toast('图片太大（>2MB）：' + f.name); continue; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      pendingImages.push({ dataUrl, b64: String(dataUrl).split(',')[1] || '', name: f.name });
+      renderThumbs();
+    };
+    reader.readAsDataURL(f);
+  }
+}
+function renderThumbs() {
+  // 复用输入框上方的小预览（临时插到 footer 里）
+  let bar = document.getElementById('thumbBar');
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'thumbBar';
+    bar.className = 'thumbs';
+    bar.style.marginBottom = '8px';
+    input.parentElement.parentElement.insertBefore(bar, input.parentElement);
+  }
+  bar.innerHTML = '';
+  pendingImages.forEach((p, i) => {
+    const box = document.createElement('div');
+    box.style.position = 'relative';
+    const img = document.createElement('img');
+    img.src = p.dataUrl;
+    img.style.width = '56px'; img.style.height = '56px';
+    img.style.objectFit = 'cover'; img.style.borderRadius = '8px';
+    const x = document.createElement('span');
+    x.textContent = '✕';
+    x.style.cssText = 'position:absolute;top:-6px;right:-6px;background:#3a1f1f;color:#fca5a5;' +
+                      'border-radius:99px;font-size:11px;padding:1px 5px;cursor:pointer';
+    x.onclick = () => { pendingImages.splice(i, 1); renderThumbs(); };
+    box.append(img, x);
+    bar.appendChild(box);
+  });
+  if (!pendingImages.length) bar.remove();
+}
+$('btnPick').onclick = () => $('filePick').click();
+$('filePick').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
+
+['dragenter', 'dragover'].forEach(ev => document.body.addEventListener(ev, (e) => {
+  e.preventDefault(); document.body.classList.add('drop-hi');
+}));
+['dragleave', 'drop'].forEach(ev => document.body.addEventListener(ev, (e) => {
+  e.preventDefault(); document.body.classList.remove('drop-hi');
+}));
+document.body.addEventListener('drop', (e) => {
+  if (e.dataTransfer && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+});
+document.body.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  const files = [];
+  for (const it of items) if (it.type.startsWith('image/')) files.push(it.getAsFile());
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+
+/* ---------------- 调用模型 ---------------- */
+async function stream(messages, onChunk, opts, signal) {
+  // 预设角色的 system prompt（空字符串 = 不加 system，完全跟随模型默认行为）
+  const sysText = (opts && opts.system) || '';
+  const msgs = sysText ? [{ role: 'system', content: sysText }].concat(messages) : messages;
+  const body = {
+    model: MODEL,
+    messages: msgs,
+    stream: true,
+    options: Object.assign({ temperature: 0.7, num_predict: thinking ? 2048 : 512 }, opts || {})
+  };
+  if (!thinking) body.think = false;
+  const res = await fetch(API + '/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: signal
+  });
+  if (!res.ok) {
+    let detail = '';
+    try { detail = (await res.text()).slice(0, 300); } catch (e) {}
+    const err = new Error('HTTP ' + res.status + (detail ? '：' + detail : ''));
+    err.status = res.status;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', out = '', last = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let j; try { j = JSON.parse(line); } catch { continue; }
+      if (j.message && j.message.thinking) onChunk && onChunk({ thinking: j.message.thinking });
+      if (j.message && j.message.content) {
+        out += j.message.content;
+        onChunk && onChunk({ content: j.message.content, all: out });
+      }
+      if (j.done) { last = j; onChunk && onChunk({ done: j }); }
+    }
+  }
+  return { text: out, last };
+}
+
+/* ---------------- 发送 ---------------- */
+async function send() {
+  const text = input.value.trim();
+  const imgs = pendingImages.slice();
+  if (!text && !imgs.length) return;
+
+  let c = current();
+  if (!c) { newChat(true); c = current(); }
+  if (busyChats.has(c.id)) return;   // 只拦这个对话
+
+  busyChats.add(c.id);
+  input.value = ''; autoGrow();
+  pendingImages = []; renderThumbs();
+
+  const userMsg = { role: 'user', content: text };
+  if (imgs.length) userMsg.images = imgs.map(p => p.b64);
+  c.messages.push(userMsg);
+  if (c.title === '新对话' && text) c.title = text.slice(0, 20);
+  saveStore(); renderList();
+
+  // 建立这个对话的实时状态（渲染时会自动挂到气泡上）
+  const st = { out: '', meta: '', thinkingText: '',
+               node: null, textEl: null, metaEl: null, thinkEl: null };
+  streams.set(c.id, st);
+  renderMessages();
+
+  const t0 = performance.now();
+  let started = false, firstTokenAt = null, charCount = 0, thinkChars = 0, saved = false, finalMeta = '';
+
+  const setMeta = (msg) => { st.meta = msg; if (st.metaEl) st.metaEl.textContent = msg; };
+  const setOut = (val) => {
+    st.out = val;
+    if (st.textEl) { st.textEl.textContent = val; log.scrollTop = log.scrollHeight; }
+  };
+  const setThinking = (msg) => { st.thinkingText = msg; if (st.thinkEl) st.thinkEl.textContent = msg; };
+
+  const tick = setInterval(() => {
+    const w = (performance.now() - t0) / 1000;
+    if (!started) {
+      const pos = queuePosition(c.id);
+      setMeta(pos > 1
+        ? '🕒 排队中（前面还有 ' + (pos - 1) + ' 个） · ' + w.toFixed(1) + ' 秒'
+        : '⏳ 准备中… ' + w.toFixed(1) + ' 秒');
+      return;
+    }
+    if (firstTokenAt === null) {
+      setMeta('⏳ ' + (thinkChars ? '思考中 ' + thinkChars + ' 字 · ' : '等待模型… ') + w.toFixed(1) + ' 秒');
+    } else {
+      const g = (performance.now() - firstTokenAt) / 1000;
+      setMeta('✍️ 生成中 ' + w.toFixed(1) + ' 秒 · ' + charCount + ' 字 · ' +
+        (g > 0.3 ? (charCount / g).toFixed(1) : '…') + ' 字/秒');
+    }
+  }, 100);
+
+  function finish(content, metaText) {
+    if (saved) return;
+    saved = true;
+    clearInterval(tick);
+    streams.delete(c.id);
+    busyChats.delete(c.id);
+    c.messages.push({ role: 'assistant', content: content, meta: metaText || '' });
+    saveStore();
+    if (store.currentId === c.id) {
+      if (metaText) { /* 完成后整段重绘，meta 由渲染决定 */ }
+      renderMessages();
+    } else {
+      renderList();
+    }
+  }
+
+  const job = { chatId: c.id, ac: new AbortController(), cancelled: false, run: null };
+
+  job.run = async () => {
+    started = true;
+    try {
+      const msgs = c.messages.map(m => {
+        const o = { role: m.role, content: m.content };
+        if (m.images && m.images.length) o.images = m.images;
+        return o;
+      });
+      const r = await stream(msgs, (ev) => {
+        if (ev.thinking) {
+          thinkChars += ev.thinking.length;
+          setThinking('思考中…（已 ' + thinkChars + ' 字）');
+        }
+        if (ev.all !== undefined) {
+          if (firstTokenAt === null) firstTokenAt = performance.now();
+          charCount = ev.all.length;
+          setOut(ev.all);
+        }
+        if (ev.done) {
+          const secs = ((performance.now() - t0) / 1000).toFixed(1);
+          const g = firstTokenAt ? ((performance.now() - firstTokenAt) / 1000) : 0;
+          const tps = ev.done.eval_count && ev.done.eval_duration
+            ? (ev.done.eval_count / (ev.done.eval_duration / 1e9)).toFixed(1) : '?';
+          const cps = g > 0.1 ? (charCount / g).toFixed(1) : '?';
+          finalMeta = '✅ ' + secs + ' 秒（生成 ' + g.toFixed(1) + ' 秒） · ' +
+            (ev.done.eval_count || 0) + ' tokens · ' + tps + ' tok/s · ' + cps + ' 字/秒';
+          setMeta(finalMeta);
+        }
+      }, { system: currentPreset().system }, job.ac.signal);
+
+      setThinking('');
+      finish(r.text, finalMeta || ('✅ ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒 · ' + charCount + ' 字'));
+    } catch (e) {
+      if (e && e.name === 'AbortError') {
+        const partial = (st.out || '').trim();
+        finish((partial ? partial + '\n\n' : '') + '（已中断）', '⏹ 已中断（已跑 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒 · ' + (st.out || '').length + ' 字）');
+      } else {
+        clearInterval(tick);
+        streams.delete(c.id);
+        busyChats.delete(c.id);
+        const detail = (e && e.message) ? e.message : String(e);
+        // 把错误也存进对话，避免"只剩用户气泡、看不出发生了什么"
+        c.messages.push({ role: 'assistant', meta: '⚠️ 失败于 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒',
+          content: '⚠️ 请求失败：' + detail +
+          '\n\n（可能是 Ollama 正在处理另一个请求，稍等几秒再发一次）' });
+        saved = true;
+        saveStore();
+        if (store.currentId === c.id) renderMessages();
+        stateBadge.textContent = '请求失败';
+        stateBadge.className = 'badge off';
+        showErrorBanner('请求失败：' + detail);
+      }
+    }
+  };
+
+  enqueueJob(job);
+}
+/* ---------------- 工具：翻译 / 总结 ---------------- */
+let toolBusy = false;
+async function runTool(kind) {
+  if (toolBusy) return;
+  const c = current();
+  let source = input.value.trim();
+  if (!source && c) {
+    for (let i = c.messages.length - 1; i >= 0; i--) {
+      if (c.messages[i].role === 'assistant' && c.messages[i].content) { source = c.messages[i].content; break; }
+    }
+  }
+  if (!source) { toast('没有可处理的内容：先在输入框写点什么，或者先让 AI 回答一句'); return; }
+
+  const prompts = {
+    translate: '把下面这段内容翻译成自然、准确的英文。只输出译文，不要解释：\n\n' + source,
+    translate_zh: '把下面这段内容翻译成自然、通顺的简体中文。只输出译文，不要解释：\n\n' + source,
+    summary: '把下面这段内容总结成 3-5 条要点，用中文，每条一行，只输出要点：\n\n' + source
+  };
+  const titles = { translate: '翻译成英文', translate_zh: '翻译成中文', summary: '总结' };
+
+  toolBusy = true;
+  toolOut.hidden = false;
+  toolTitle.textContent = titles[kind] + '（生成中…）';
+  toolBody.textContent = '';
+
+  try {
+    const r = await stream([{ role: 'user', content: prompts[kind] }], (ev) => {
+      if (ev.all !== undefined) toolBody.textContent = ev.all;
+    }, { temperature: 0.2, num_predict: 800, system: currentPreset().system });
+    toolTitle.textContent = titles[kind] + '（完成 ' +
+      ((r.last && r.last.eval_count) ? r.last.eval_count + ' tokens' : '') + '）';
+  } catch (e) {
+    toolTitle.textContent = titles[kind] + '（失败）';
+    toolBody.textContent = String(e);
+  } finally {
+    toolBusy = false;
+  }
+}
+
+/* ---------------- 导出 ---------------- */
+function download(name, text, mime) {
+  const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+function stamp() {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+$('btnExportMd').onclick = () => {
+  const c = current();
+  if (!c) { toast('没有对话可导出'); return; }
+  const lines = ['# ' + (c.title || '对话'), '', '- 模型：`' + MODEL + '`',
+                 '- 导出时间：' + new Date().toLocaleString('zh-CN'), ''];
+  for (const m of c.messages) {
+    lines.push('## ' + (m.role === 'user' ? '你' : 'AI'));
+    lines.push('');
+    lines.push(m.content || '');
+    if (m.images && m.images.length) lines.push('', '> 含 ' + m.images.length + ' 张图片（未导出图片本体）');
+    lines.push('');
+  }
+  download('qwen-' + stamp() + '.md', lines.join('\n'), 'text/markdown;charset=utf-8');
+};
+$('btnExportAll').onclick = () => {
+  download('qwen-all-' + stamp() + '.json', JSON.stringify(store, null, 1), 'application/json');
+};
+
+/* ---------------- 其它交互 ---------------- */
+function autoGrow() {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 220) + 'px';
+}
+function toast(msg) {
+  const d = document.createElement('div');
+  d.textContent = msg;
+  d.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+    'background:#3a1f1f;color:#fca5a5;padding:8px 14px;border-radius:10px;font-size:13px;z-index:99';
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 2600);
+}
+
+btnSend.onclick = send;
+btnNew.onclick = () => newChat();          // ← 之前漏了这行，导致「新建对话」按钮点了没反应
+$('btnTranslate').onclick = () => runTool('translate');
+$('btnTranslateZh').onclick = () => runTool('translate_zh');
+$('btnSummary').onclick = () => runTool('summary');
+$('btnClearOne').onclick = () => {
+  const c = current();
+  if (!c || !c.messages.length) return;
+  if (!confirm('清空这个对话的消息（对话本身保留）？')) return;
+  c.messages = []; saveStore(); renderMessages();
+};
+$('btnCloseTool').onclick = () => { toolOut.hidden = true; };
+$('btnCopyTool').onclick = async () => {
+  try { await navigator.clipboard.writeText(toolBody.textContent || ''); toast('已复制'); }
+  catch (e) { toast('复制失败，请手动选中'); }
+};
+$('btnSide').onclick = () => $('sidebar').classList.toggle('collapsed');
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+input.addEventListener('input', autoGrow);
+
+/* ---------------- 启动 ---------------- */
+$('modelName').textContent = MODEL;
+
+loadStore();
+if (!store.chats.length) newChat(true);
+renderList();
+renderMessages();
+input.focus();
+</script>
+</body>
+</html>

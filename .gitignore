@@ -1,0 +1,6 @@
+# 抽帧输出、临时截图
+*.frames.png
+frames-*.png
+*.log
+Thumbs.db
+.DS_Store
