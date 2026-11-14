@@ -559,6 +559,7 @@ async function send() {
 
   const t0 = performance.now();
   let started = false, firstTokenAt = null, charCount = 0, thinkChars = 0, saved = false, finalMeta = '';
+  let thinkingAll = '';
 
   const setMeta = (msg) => { st.meta = msg; if (st.metaEl) st.metaEl.textContent = msg; };
   const setOut = (val) => {
@@ -614,6 +615,7 @@ async function send() {
       const r = await stream(msgs, (ev) => {
         if (ev.thinking) {
           thinkChars += ev.thinking.length;
+          thinkingAll += ev.thinking;
           setThinking('思考中…（已 ' + thinkChars + ' 字）');
         }
         if (ev.all !== undefined) {
@@ -626,15 +628,31 @@ async function send() {
           const g = firstTokenAt ? ((performance.now() - firstTokenAt) / 1000) : 0;
           const tps = ev.done.eval_count && ev.done.eval_duration
             ? (ev.done.eval_count / (ev.done.eval_duration / 1e9)).toFixed(1) : '?';
-          const cps = g > 0.1 ? (charCount / g).toFixed(1) : '?';
-          finalMeta = '✅ ' + secs + ' 秒（生成 ' + g.toFixed(1) + ' 秒） · ' +
-            (ev.done.eval_count || 0) + ' tokens · ' + tps + ' tok/s · ' + cps + ' 字/秒';
+          if (charCount === 0) {
+            // 一个字正文都没有：多半是思考把 num_predict 占满了
+            finalMeta = '⚠️ 没有正文输出 · 总 ' + secs + ' 秒 · ' +
+              (ev.done.eval_count || 0) + ' tokens' +
+              (thinkChars ? '（思考占了 ' + thinkChars + ' 字）' : '') +
+              ' —— 把「思考」关掉再试';
+          } else {
+            const cps = g > 0.1 ? (charCount / g).toFixed(1) : '?';
+            finalMeta = '✅ ' + secs + ' 秒（生成 ' + g.toFixed(1) + ' 秒） · ' +
+              (ev.done.eval_count || 0) + ' tokens · ' + tps + ' tok/s · ' + cps + ' 字/秒';
+          }
           setMeta(finalMeta);
         }
       }, { system: currentPreset().system }, job.ac.signal);
 
       setThinking('');
-      finish(r.text, finalMeta || ('✅ ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒 · ' + charCount + ' 字'));
+      let body = r.text;
+      if (!body.trim()) {
+        body = '⚠️ 模型没有输出正文。\n\n' +
+          (thinkingAll
+            ? '它把 token 都花在思考上了（共 ' + thinkChars + ' 字）。思考开头：\n\n' +
+              thinkingAll.slice(0, 400) + (thinkingAll.length > 400 ? '…' : '')
+            : '原因未知（既没有正文也没有思考内容）。');
+      }
+      finish(body, finalMeta || ('✅ ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒 · ' + charCount + ' 字'));
     } catch (e) {
       if (e && e.name === 'AbortError') {
         const partial = (st.out || '').trim();
