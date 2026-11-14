@@ -113,6 +113,15 @@
             style="font:inherit;font-size:12px;padding:4px 8px;border-radius:8px;
                    border:1px solid #2b3450;background:#1a2036;color:#dbe2f3"></select>
     <span class="spacer"></span>
+    <select id="maxOutSel" title="单次回答的最大 token 数（太小会截断）"
+            style="font:inherit;font-size:12px;padding:4px 8px;border-radius:8px;
+                   border:1px solid #2b3450;background:#1a2036;color:#dbe2f3">
+      <option value="0">输出上限：自动</option>
+      <option value="512">512</option>
+      <option value="1024">1024</option>
+      <option value="2048">2048</option>
+      <option value="4096">4096</option>
+    </select>
     <button id="btnThink" title="数学/多步推理时才需要，会很慢">打开思考</button>
     <button id="btnExportMd">导出这段（Markdown）</button>
   </header>
@@ -200,6 +209,14 @@ const PRESETS = [
   { id: 'translator', name: '翻译官',       system: '你只做翻译。把用户给的内容译成目标语言（未指定则中英互译），只输出译文，不解释。' }
 ];
 let presetId = localStorage.getItem(PRESET_KEY) || 'follow';
+
+/* 输出上限（num_predict）：默认 512 太小，稍长的回答会被拦腰截断 */
+const MAXOUT_KEY = 'ollama-chat:maxout:v1';
+let maxOut = parseInt(localStorage.getItem(MAXOUT_KEY) || '0', 10) || 0;  // 0 = 自动
+function maxOutTokens() {
+  if (maxOut > 0) return maxOut;
+  return thinking ? 2048 : 1024;   // 自动：关思考 1024，开思考 2048
+}
 function currentPreset() {
   return PRESETS.find(p => p.id === presetId) || PRESETS[0];
 }
@@ -414,6 +431,15 @@ presetSel.onchange = () => {
   toast('预设已切换：' + currentPreset().name);
 };
 
+/* 输出上限选择器 */
+const maxOutSel = $('maxOutSel');
+maxOutSel.value = String(maxOut);
+maxOutSel.onchange = () => {
+  maxOut = parseInt(maxOutSel.value, 10) || 0;
+  localStorage.setItem(MAXOUT_KEY, String(maxOut));
+  toast('输出上限：' + (maxOut === 0 ? '自动（' + maxOutTokens() + '）' : maxOut));
+};
+
 btnThink.onclick = () => {
   thinking = !thinking;
   thinkBadge.textContent = thinking ? '思考：开启（会慢）' : '思考：关闭';
@@ -492,7 +518,7 @@ async function stream(messages, onChunk, opts, signal) {
     model: MODEL,
     messages: msgs,
     stream: true,
-    options: Object.assign({ temperature: 0.7, num_predict: thinking ? 2048 : 512 }, opts || {})
+    options: Object.assign({ temperature: 0.7, num_predict: maxOutTokens() }, opts || {})
   };
   if (!thinking) body.think = false;
   const res = await fetch(API + '/api/chat', {
@@ -560,6 +586,7 @@ async function send() {
   const t0 = performance.now();
   let started = false, firstTokenAt = null, charCount = 0, thinkChars = 0, saved = false, finalMeta = '';
   let thinkingAll = '';
+  let truncated = false;
 
   const setMeta = (msg) => { st.meta = msg; if (st.metaEl) st.metaEl.textContent = msg; };
   const setOut = (val) => {
@@ -624,6 +651,7 @@ async function send() {
           setOut(ev.all);
         }
         if (ev.done) {
+          if (ev.done.done_reason === 'length') truncated = true;
           const secs = ((performance.now() - t0) / 1000).toFixed(1);
           const g = firstTokenAt ? ((performance.now() - firstTokenAt) / 1000) : 0;
           const tps = ev.done.eval_count && ev.done.eval_duration
@@ -636,7 +664,8 @@ async function send() {
               ' —— 把「思考」关掉再试';
           } else {
             const cps = g > 0.1 ? (charCount / g).toFixed(1) : '?';
-            finalMeta = '✅ ' + secs + ' 秒（生成 ' + g.toFixed(1) + ' 秒） · ' +
+            finalMeta = (truncated ? '✂️ 被截断 · ' : '✅ ') +
+              secs + ' 秒（生成 ' + g.toFixed(1) + ' 秒） · ' +
               (ev.done.eval_count || 0) + ' tokens · ' + tps + ' tok/s · ' + cps + ' 字/秒';
           }
           setMeta(finalMeta);
@@ -651,6 +680,10 @@ async function send() {
             ? '它把 token 都花在思考上了（共 ' + thinkChars + ' 字）。思考开头：\n\n' +
               thinkingAll.slice(0, 400) + (thinkingAll.length > 400 ? '…' : '')
             : '原因未知（既没有正文也没有思考内容）。');
+      }
+      if (truncated && body.trim()) {
+        body += '\n\n---\n✂️ 回答被截断（达到 ' + maxOutTokens() +
+                ' token 上限）。把右上角「输出上限」调大，或直接说「继续」。';
       }
       finish(body, finalMeta || ('✅ ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒 · ' + charCount + ' 字'));
     } catch (e) {
