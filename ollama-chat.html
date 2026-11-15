@@ -694,11 +694,16 @@ async function send() {
         clearInterval(tick);
         streams.delete(c.id);
         busyChats.delete(c.id);
-        const detail = (e && e.message) ? e.message : String(e);
-        // 把错误也存进对话，避免"只剩用户气泡、看不出发生了什么"
+        // fetch 失败几乎都是"Ollama 没启动"：把 TypeError 翻译成人话
+        const rawMsg = (e && e.message) ? e.message : String(e);
+        const netErr = (e && (e.name === 'TypeError' ||
+          /Failed to fetch|NetworkError|Load failed/i.test(rawMsg)));
+        const detail = netErr ? '连不上 Ollama（127.0.0.1:11434）' : rawMsg;
+        const hint = netErr
+          ? '\n\nOllama 服务没在运行。打开 Ollama 应用，或用「Qwen聊天」快捷方式重新启动一次（它现在会自动拉起 Ollama）。'
+          : '\n\n（可能是 Ollama 正在处理另一个请求，稍等几秒再发一次）';
         c.messages.push({ role: 'assistant', meta: '⚠️ 失败于 ' + ((performance.now() - t0) / 1000).toFixed(1) + ' 秒',
-          content: '⚠️ 请求失败：' + detail +
-          '\n\n（可能是 Ollama 正在处理另一个请求，稍等几秒再发一次）' });
+          content: '⚠️ 请求失败：' + detail + hint });
         saved = true;
         saveStore();
         if (store.currentId === c.id) renderMessages();

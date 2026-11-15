@@ -57,6 +57,33 @@ if (-not $py) {
     exit 1
 }
 
+# ---- 确保 Ollama 在跑（重启后它经常没自动启动，页面就会满屏 Failed to fetch）----
+function Test-Ollama {
+    try {
+        $r = Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/version' -TimeoutSec 3 -UseBasicParsing
+        return ($r.StatusCode -eq 200)
+    } catch { return $false }
+}
+
+if (-not (Test-Ollama)) {
+    Write-Host "Ollama 没在跑，正在启动…" -ForegroundColor Yellow
+    $exe = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+    if (Test-Path $exe) {
+        Start-Process -FilePath $exe -ArgumentList 'serve' -WindowStyle Hidden
+        for ($i = 0; $i -lt 20; $i++) {
+            Start-Sleep -Milliseconds 700
+            if (Test-Ollama) { break }
+        }
+    }
+    if (Test-Ollama) {
+        Write-Host "Ollama 已启动" -ForegroundColor Green
+    } else {
+        Write-Host "Ollama 启动失败：请手动打开 Ollama 应用后再试" -ForegroundColor Red
+        Read-Host "按回车退出"
+        exit 1
+    }
+}
+
 # ---- 端口被占就先看看是不是已经在跑 ----
 $busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($busy) {
